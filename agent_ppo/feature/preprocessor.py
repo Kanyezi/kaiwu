@@ -74,6 +74,8 @@ class Preprocessor:
         self.prev_charger_dist = None
         self.cur_warehouse_dist = None
         self.prev_warehouse_dist = None
+        self.map_info = None
+        self.prev_reward_by_pos = {}
 
         # Entities / 实体
         self.stations = []
@@ -247,7 +249,7 @@ class Preprocessor:
             for dy in range(-radius, radius + 1):
                 # 只保留最外圈的点（曼哈顿距离或切比雪夫距离等于radius）
                 if max(abs(dx), abs(dy)) == radius:
-                    if self.map_info[cx+dx][cy+dy]:
+                    if not self.map_info[cx+dx][cy+dy]:
                         return 1
         return 0
 
@@ -262,7 +264,7 @@ class Preprocessor:
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
-            reward += 1.0 * newly_delivered
+            reward += 1.5 * newly_delivered
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
@@ -369,8 +371,18 @@ class Preprocessor:
                 f = self.cheack_wall(center,i)
                 num = 3-i
                 if(f):
-                    reward -= num*0.1;
+                    reward -= num*0.5;
                     break
+
+        # 7. Revisit non-improvement penalty / 同路径不提升惩罚
+        # If revisiting the same grid with reward <= previous reward at this grid, apply extra penalty.
+        # 若回到同一位置且当前步奖励 <= 该位置上次奖励，则额外惩罚。
+        pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
+        raw_step_reward = reward
+        prev_reward_at_pos = self.prev_reward_by_pos.get(pos_key)
+        if prev_reward_at_pos is not None and raw_step_reward <= prev_reward_at_pos:
+            reward -= 0.1
+        self.prev_reward_by_pos[pos_key] = raw_step_reward
 
             
                                
