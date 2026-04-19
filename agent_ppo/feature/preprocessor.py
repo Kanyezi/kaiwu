@@ -371,7 +371,7 @@ class Preprocessor:
                 f = self.cheack_wall(center,i)
                 num = 3-i
                 if(f):
-                    reward -= num*0.5;
+                    reward -= num*1;
                     break
 
         # 7. Revisit non-improvement penalty / 同路径不提升惩罚
@@ -381,7 +381,7 @@ class Preprocessor:
         raw_step_reward = reward
         prev_reward_at_pos = self.prev_reward_by_pos.get(pos_key)
         if prev_reward_at_pos is not None and raw_step_reward <= prev_reward_at_pos:
-            reward -= 0.1
+            reward -= 0.01
         self.prev_reward_by_pos[pos_key] = raw_step_reward
 
             
