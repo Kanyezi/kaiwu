@@ -1,0 +1,2 @@
+# Ignore Python compiled bytecode files across the whole project
+**/*.pyc
