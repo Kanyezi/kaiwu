@@ -296,14 +296,12 @@ class Preprocessor:
         # 即电量越低扣分越高，范围约为 [0.001, 0.02]。
         battery_now = float(self.battery)
         low_battery = battery_now < 20.0
+        package_cnt = int(len(self.packages))
 
-        if self.cur_charger_dist is not None:
-            if battery_now < 50.0:
-                battery_penalty_ratio = np.clip((50.0 - battery_now) / 50.0, 0.0, 1.0)
-                battery_penalty = 0.001 + 0.019 * battery_penalty_ratio
-                reward -= battery_penalty
-
-            if low_battery and self.prev_charger_dist is not None:
+        # Charger rewards only trigger at low battery.
+        # 充电桩奖励仅在低电量时触发。
+        if low_battery and self.cur_charger_dist is not None:
+            if self.prev_charger_dist is not None:
                 charger_progress = self.prev_charger_dist - self.cur_charger_dist
                 if charger_progress > 0:
                     reward += 0.025 * min(charger_progress, 5.0)
@@ -315,30 +313,38 @@ class Preprocessor:
                 self.prev_charger_dist is None or self.prev_charger_dist >= 3.0
             )
             if arrived:
-                if battery_now > 20.0:
-                    reward -= 0.15
-                elif battery_now < 20.0:
-                    reward += 0.15
+                reward += 0.15
 
         # 5. Replenishment reward to warehouse / 补货前往仓库奖励
-        # 仅在没有包裹时生效，鼓励前往仓库进行补货。
+        # 仅在低电量时触发，并按包裹数动态调整仓库奖励强度（与充电桩比较）：
+        # - package=3: 仓库奖励 < 充电桩
+        # - package=2: 仓库奖励 < 充电桩（差值更小）
+        # - package=1: 仓库奖励 < 充电桩（差值进一步缩小）
+        # - package=0: 仓库奖励 > 充电桩
+        # warehouse_scale 取值：{3:0.70, 2:0.85, 1:0.95, 0:1.20}
         # 定义 restock_progress = prev_warehouse_dist - cur_warehouse_dist。
-        # - 若 restock_progress > 0（靠近仓库）：reward += 0.035 * min(restock_progress, 5.0)
-        # - 若 restock_progress < 0（远离仓库）：reward += 0.008 * max(restock_progress, -5.0)
-        # 到达判定：cur_warehouse_dist < 3.0 且上一帧不在该半径内，额外 reward += 0.25。
-        if len(self.packages) == 0 and self.cur_warehouse_dist is not None:
+        # - 若 restock_progress > 0：reward += (0.025 * warehouse_scale) * min(restock_progress, 5.0)
+        # - 若 restock_progress < 0：reward += (0.010 * warehouse_scale) * max(restock_progress, -5.0)
+        # 到达判定：cur_warehouse_dist < 3.0 且上一帧不在该半径内。
+        # 到达奖励按包裹数分段：{0:0.20, 1:0.12, 2:0.06, 3:0.00}。
+        # 即包裹为 0 奖励最高，包裹为 3 不给到达奖励。
+        if low_battery and self.cur_warehouse_dist is not None:
+            warehouse_scale_map = {3: 0.70, 2: 0.85, 1: 0.95, 0: 1.20}
+            warehouse_scale = warehouse_scale_map.get(min(max(package_cnt, 0), 3), 0.95)
+
             if self.prev_warehouse_dist is not None:
                 restock_progress = self.prev_warehouse_dist - self.cur_warehouse_dist
                 if restock_progress > 0:
-                    reward += 0.035 * min(restock_progress, 5.0)
+                    reward += (0.025 * warehouse_scale) * min(restock_progress, 5.0)
                 elif restock_progress < 0:
-                    reward += 0.008 * max(restock_progress, -5.0)
+                    reward += (0.010 * warehouse_scale) * max(restock_progress, -5.0)
 
             arrived_warehouse = self.cur_warehouse_dist < 3.0 and (
                 self.prev_warehouse_dist is None or self.prev_warehouse_dist >= 3.0
             )
             if arrived_warehouse:
-                reward += 0.25
+                warehouse_arrival_reward_map = {0: 0.20, 1: 0.12, 2: 0.06, 3: 0.00}
+                reward += warehouse_arrival_reward_map.get(min(max(package_cnt, 0), 3), 0.00)
 
         self.prev_target_dist = self.cur_target_dist
         self.prev_charger_dist = self.cur_charger_dist
