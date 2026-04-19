@@ -72,10 +72,13 @@ class Preprocessor:
         self.prev_target_dist = None
         self.cur_charger_dist = None
         self.prev_charger_dist = None
+        self.cur_warehouse_dist = None
+        self.prev_warehouse_dist = None
 
         # Entities / 实体
         self.stations = []
         self.chargers = []
+        self.warehouses = []
 
     def _parse_obs(self, env_obs):
         """Parse essential fields from observation dict.
@@ -98,6 +101,7 @@ class Preprocessor:
 
         self.stations = []
         self.chargers = []
+        self.warehouses = []
         for organ in frame_state.get("organs", []):
             st = organ.get("sub_type", 0)
             if st == 3:
@@ -111,6 +115,19 @@ class Preprocessor:
             is_charger = ("charger" in organ_desc) or ("charge" in organ_desc) or ("充电" in organ_desc) or (st == 4)
             if is_charger:
                 self.chargers.append(organ)
+
+            # Warehouse compatibility: prefer explicit naming, fallback to a common subtype.
+            # 仓库兼容识别：优先按名称字段识别，兜底按常见 sub_type。
+            is_warehouse = (
+                ("warehouse" in organ_desc)
+                or ("depot" in organ_desc)
+                or ("store" in organ_desc)
+                or ("仓库" in organ_desc)
+                or ("补货" in organ_desc)
+                or (st == 2)
+            )
+            if is_warehouse:
+                self.warehouses.append(organ)
 
         self.legal_act = obs.get("legal_action", [1] * 8)
 
@@ -147,6 +164,14 @@ class Preprocessor:
             )
         else:
             self.cur_charger_dist = None
+
+        if len(self.warehouses) > 0:
+            self.cur_warehouse_dist = min(
+                np.sqrt((w["pos"]["x"] - self.cur_pos[0]) ** 2 + (w["pos"]["z"] - self.cur_pos[1]) ** 2)
+                for w in self.warehouses
+            )
+        else:
+            self.cur_warehouse_dist = None
 
         if len(target_stations) > 0:
             self.cur_target_dist = min(
@@ -295,7 +320,28 @@ class Preprocessor:
                 elif battery_now < 20.0:
                     reward += 0.2
 
+        # 5. Replenishment reward to warehouse / 补货前往仓库奖励
+        # 仅在没有包裹时生效，鼓励前往仓库进行补货。
+        # 定义 restock_progress = prev_warehouse_dist - cur_warehouse_dist。
+        # - 若 restock_progress > 0（靠近仓库）：reward += 0.02 * min(restock_progress, 5.0)
+        # - 若 restock_progress < 0（远离仓库）：reward += 0.008 * max(restock_progress, -5.0)
+        # 到达判定：cur_warehouse_dist < 3.0 且上一帧不在该半径内，额外 reward += 0.1。
+        if len(self.packages) == 0 and self.cur_warehouse_dist is not None:
+            if self.prev_warehouse_dist is not None:
+                restock_progress = self.prev_warehouse_dist - self.cur_warehouse_dist
+                if restock_progress > 0:
+                    reward += 0.02 * min(restock_progress, 5.0)
+                elif restock_progress < 0:
+                    reward += 0.008 * max(restock_progress, -5.0)
+
+            arrived_warehouse = self.cur_warehouse_dist < 3.0 and (
+                self.prev_warehouse_dist is None or self.prev_warehouse_dist >= 3.0
+            )
+            if arrived_warehouse:
+                reward += 0.1
+
         self.prev_target_dist = self.cur_target_dist
         self.prev_charger_dist = self.cur_charger_dist
+        self.prev_warehouse_dist = self.cur_warehouse_dist
 
         return [reward]
