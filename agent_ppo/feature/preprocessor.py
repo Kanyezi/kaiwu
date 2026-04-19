@@ -81,6 +81,7 @@ class Preprocessor:
         self.stations = []
         self.chargers = []
         self.warehouses = []
+        self.log = []
 
     def _parse_obs(self, env_obs):
         """Parse essential fields from observation dict.
@@ -253,6 +254,13 @@ class Preprocessor:
                         return 1
         return 0
 
+    def reward_log(self,name,num):
+        list = {
+            "name":name,
+            "val":num
+        }
+        # self.log(f"[reward]:{list}")
+
 
     def _reward_process(self):
         """Reward function.
@@ -265,102 +273,74 @@ class Preprocessor:
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
             reward += 1.5 * newly_delivered
+            self.reward_log("Delivery",1.5 * newly_delivered)
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
+        self.reward_log("Step",-0.001)
+
 
         # 3. Distance shaping reward / 目标距离塑形奖励
         # 规则（目标驿站距离塑形）：定义 progress = prev_target_dist - cur_target_dist。
         # - 若 progress > 0（靠近目标驿站）：reward += 0.015 * min(progress, 5.0)
         # - 若 progress < 0（远离目标驿站）：reward += 0.01 * max(progress, -5.0)
         # 说明：靠近奖励系数 0.015 大于远离惩罚系数 0.01。
-        #
-        # 近距离额外奖励：
-        # - 若 cur_target_dist < 15：reward += 0.015
-        # - 若 cur_target_dist < 8： reward += 0.02（可与上一条叠加）
         if self.cur_target_dist is not None:
             if self.prev_target_dist is not None:
                 progress = self.prev_target_dist - self.cur_target_dist
                 if progress > 0:
                     reward += 0.015 * min(progress, 5.0)
+                    self.reward_log("Distance",0.015 * min(progress, 5.0))
                 elif progress < 0:
                     reward += 0.01 * max(progress, -5.0)
+                    self.reward_log("Distance",0.01 * max(progress, -5.0))
 
-            # Extra bonus when already close to target station.
-            if self.cur_target_dist < 15:
-                reward += 0.015
-            if self.cur_target_dist < 8:
-                reward += 0.02
 
         # 4. Charger shaping & arrival reward / 充电桩塑形与到达奖励
-        # Rule A (low battery approach shaping):
-        # 当 battery < 20 时，定义 charger_progress = prev_charger_dist - cur_charger_dist。
-        # - 若 charger_progress > 0（靠近）：reward += 0.025 * min(charger_progress, 5.0)
-        # - 若 charger_progress < 0（远离）：reward += 0.01 * max(charger_progress, -5.0)
-        # 说明：靠近奖励系数 0.025 大于远离惩罚系数 0.01。
-        #
-        # Rule B (arrival reward by battery threshold):
+        # Rule A (arrival reward by battery threshold):
         # 到达判定：cur_charger_dist < 3.0 且上一帧不在该半径内。
-        # - 若 battery > 20：reward -= 0.15
-        # - 若 battery < 20：reward += 0.15
-        # - 若 battery == 20：reward += 0（不奖不惩）
+        # 到达时按剩余电量给予奖励：电量越低，奖励越高。
+        # 这样不再根据“靠近过程”给分，而是只在真正到达时按紧急程度给分。
+        #
+        # Example:
+        # - battery = 20 -> reward ≈ 0.15
+        # - battery = 10 -> reward ≈ 0.225
+        # - battery = 0  -> reward ≈ 0.30
         #
         # Rule C (battery-based deduction below 50):
         # 当 battery < 50 时，额外扣分：
         # penalty = 0.001 + 0.019 * clip((50 - battery) / 50, 0, 1)
         # 即电量越低扣分越高，范围约为 [0.001, 0.02]。
-        battery_now = float(self.battery)
-        low_battery = battery_now < 20.0
-        package_cnt = int(len(self.packages))
 
-        # Charger rewards only trigger at low battery.
-        # 充电桩奖励仅在低电量时触发。
-        if low_battery and self.cur_charger_dist is not None:
-            if self.prev_charger_dist is not None:
-                charger_progress = self.prev_charger_dist - self.cur_charger_dist
-                if charger_progress > 0:
-                    reward += 0.025 * min(charger_progress, 5.0)
-                elif charger_progress < 0:
-                    reward += 0.01 * max(charger_progress, -5.0)
-
-            # Consider entering a small radius as "arrived".
+        # 充电桩奖励仅在到达时触发。
+        if self.cur_charger_dist is not None:
             arrived = self.cur_charger_dist < 3.0 and (
                 self.prev_charger_dist is None or self.prev_charger_dist >= 3.0
             )
             if arrived:
-                reward += 0.15
+                num = (max(0,(self.battery_max*0.3)-self.battery)/self.battery_max*0.3)*2
+                reward += num
+                self.reward_log("Charger",num)
 
         # 5. Replenishment reward to warehouse / 补货前往仓库奖励
-        # 仅在低电量时触发，并按包裹数动态调整仓库奖励强度（与充电桩比较）：
-        # - package=3: 仓库奖励 < 充电桩
-        # - package=2: 仓库奖励 < 充电桩（差值更小）
-        # - package=1: 仓库奖励 < 充电桩（差值进一步缩小）
-        # - package=0: 仓库奖励 > 充电桩
-        # warehouse_scale 取值：{3:0.70, 2:0.85, 1:0.95, 0:1.20}
+        # 仅在手上没有包裹时触发：空手靠近大仓给奖励，其余情况不奖励。
         # 定义 restock_progress = prev_warehouse_dist - cur_warehouse_dist。
-        # - 若 restock_progress > 0：reward += (0.025 * warehouse_scale) * min(restock_progress, 5.0)
-        # - 若 restock_progress < 0：reward += (0.010 * warehouse_scale) * max(restock_progress, -5.0)
+        # - 若 restock_progress > 0：reward += 0.02 * min(restock_progress, 5.0)
+        # - 若 restock_progress < 0：reward += 0.01 * max(restock_progress, -5.0)
         # 到达判定：cur_warehouse_dist < 3.0 且上一帧不在该半径内。
-        # 到达奖励按包裹数分段：{0:0.20, 1:0.12, 2:0.06, 3:0.00}。
-        # 即包裹为 0 奖励最高，包裹为 3 不给到达奖励。
-        if low_battery and self.cur_warehouse_dist is not None:
-            warehouse_scale_map = {3: 0.70, 2: 0.85, 1: 0.95, 0: 1.20}
-            warehouse_scale = warehouse_scale_map.get(min(max(package_cnt, 0), 3), 0.95)
-
+        # 到达奖励：空手时 reward += 0.20。
+        if not self.packages and self.cur_warehouse_dist is not None:
             if self.prev_warehouse_dist is not None:
                 restock_progress = self.prev_warehouse_dist - self.cur_warehouse_dist
                 if restock_progress > 0:
-                    reward += (0.025 * warehouse_scale) * min(restock_progress, 5.0)
+                    num = 0.02 * min(restock_progress, 5.0)
+                    reward += num
+                    self.reward_log("Replenishment",num)
                 elif restock_progress < 0:
-                    reward += (0.010 * warehouse_scale) * max(restock_progress, -5.0)
-
-            arrived_warehouse = self.cur_warehouse_dist < 3.0 and (
-                self.prev_warehouse_dist is None or self.prev_warehouse_dist >= 3.0
-            )
-            if arrived_warehouse:
-                warehouse_arrival_reward_map = {0: 0.20, 1: 0.12, 2: 0.06, 3: 0.00}
-                reward += warehouse_arrival_reward_map.get(min(max(package_cnt, 0), 3), 0.00)
-
+                    num = 0.01 * max(restock_progress, -5.0)
+                    reward += num
+                    self.reward_log("Replenishment",num)
+        
         # 6. 靠墙惩罚
         # map_info 为 21x21 二维表，智能体位于中心 [10][10]。
         # 第一层(3x3)命中墙：-0.1；第二层(5x5)命中墙：-0.2。
@@ -369,9 +349,11 @@ class Preprocessor:
             center = [10, 10]
             for i in range(1,3):
                 f = self.cheack_wall(center,i)
-                num = 3-i
+                te = 3-i
                 if(f):
-                    reward -= num*1;
+                    num = -te*0.1;
+                    reward += num;
+                    self.reward_log("Replenishment",num)
                     break
 
         # 7. Revisit non-improvement penalty / 同路径不提升惩罚
@@ -381,13 +363,12 @@ class Preprocessor:
         raw_step_reward = reward
         prev_reward_at_pos = self.prev_reward_by_pos.get(pos_key)
         if prev_reward_at_pos is not None and raw_step_reward <= prev_reward_at_pos:
-            reward -= 0.01
+            num = -0.01
+            reward += num
+            self.reward_log("Revisit",num)
+
+
         self.prev_reward_by_pos[pos_key] = raw_step_reward
-
-            
-                               
-            
-
         self.prev_target_dist = self.cur_target_dist
         self.prev_charger_dist = self.cur_charger_dist
         self.prev_warehouse_dist = self.cur_warehouse_dist
