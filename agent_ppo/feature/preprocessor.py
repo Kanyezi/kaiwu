@@ -249,7 +249,7 @@ class Preprocessor:
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
-            reward += 2.0 * newly_delivered
+            reward += 1.0 * newly_delivered
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
