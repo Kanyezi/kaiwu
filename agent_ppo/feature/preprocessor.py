@@ -68,9 +68,14 @@ class Preprocessor:
         self.delivered = 0
         self.last_delivered = 0
         self.step_no = 0
+        self.cur_target_dist = None
+        self.prev_target_dist = None
+        self.cur_charger_dist = None
+        self.prev_charger_dist = None
 
         # Entities / 实体
         self.stations = []
+        self.chargers = []
 
     def _parse_obs(self, env_obs):
         """Parse essential fields from observation dict.
@@ -92,10 +97,20 @@ class Preprocessor:
         self.step_no = obs.get("step_no", 0)
 
         self.stations = []
+        self.chargers = []
         for organ in frame_state.get("organs", []):
             st = organ.get("sub_type", 0)
             if st == 3:
                 self.stations.append(organ)
+
+            # Charger compatibility: prefer explicit naming, fallback to common subtype.
+            # 充电桩兼容识别：优先按名称字段识别，兜底按常见 sub_type。
+            organ_desc = (
+                f"{organ.get('name', '')} {organ.get('type', '')} {organ.get('config_name', '')}"
+            ).lower()
+            is_charger = ("charger" in organ_desc) or ("charge" in organ_desc) or ("充电" in organ_desc) or (st == 4)
+            if is_charger:
+                self.chargers.append(organ)
 
         self.legal_act = obs.get("legal_action", [1] * 8)
 
@@ -123,6 +138,23 @@ class Preprocessor:
         # Target stations first, then by distance
         # 目标驿站优先，然后按距离排序
         target_ids = set(self.packages)
+        target_stations = [s for s in self.stations if s.get("config_id", 0) in target_ids]
+
+        if len(self.chargers) > 0:
+            self.cur_charger_dist = min(
+                np.sqrt((c["pos"]["x"] - self.cur_pos[0]) ** 2 + (c["pos"]["z"] - self.cur_pos[1]) ** 2)
+                for c in self.chargers
+            )
+        else:
+            self.cur_charger_dist = None
+
+        if len(target_stations) > 0:
+            self.cur_target_dist = min(
+                np.sqrt((s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2)
+                for s in target_stations
+            )
+        else:
+            self.cur_target_dist = None
 
         def station_sort_key(s):
             is_tgt = s.get("config_id", 0) in target_ids
@@ -197,6 +229,63 @@ class Preprocessor:
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
 
+        # 3. Distance shaping reward / 目标距离塑形奖励
+        # 规则（目标驿站距离塑形）：定义 progress = prev_target_dist - cur_target_dist。
+        # - 若 progress > 0（靠近目标驿站）：reward += 0.02 * min(progress, 5.0)
+        # - 若 progress < 0（远离目标驿站）：reward += 0.01 * max(progress, -5.0)
+        # 说明：靠近奖励系数 0.02 大于远离惩罚系数 0.01。
         #
+        # 近距离额外奖励：
+        # - 若 cur_target_dist < 15：reward += 0.02
+        # - 若 cur_target_dist < 8： reward += 0.03（可与上一条叠加）
+        if self.cur_target_dist is not None:
+            if self.prev_target_dist is not None:
+                progress = self.prev_target_dist - self.cur_target_dist
+                if progress > 0:
+                    reward += 0.02 * min(progress, 5.0)
+                elif progress < 0:
+                    reward += 0.01 * max(progress, -5.0)
+
+            # Extra bonus when already close to target station.
+            if self.cur_target_dist < 15:
+                reward += 0.02
+            if self.cur_target_dist < 8:
+                reward += 0.03
+
+        # 4. Charger shaping & arrival reward / 充电桩塑形与到达奖励
+        # Rule A (low battery approach shaping):
+        # 当 battery < 20 时，定义 charger_progress = prev_charger_dist - cur_charger_dist。
+        # - 若 charger_progress > 0（靠近）：reward += 0.03 * min(charger_progress, 5.0)
+        # - 若 charger_progress < 0（远离）：reward += 0.01 * max(charger_progress, -5.0)
+        # 说明：靠近奖励系数 0.03 大于远离惩罚系数 0.01。
+        #
+        # Rule B (arrival reward by battery threshold):
+        # 到达判定：cur_charger_dist < 3.0 且上一帧不在该半径内。
+        # - 若 battery > 20：reward -= 0.2
+        # - 若 battery < 20：reward += 0.2
+        # - 若 battery == 20：reward += 0（不奖不惩）
+        battery_now = float(self.battery)
+        low_battery = battery_now < 20.0
+
+        if self.cur_charger_dist is not None:
+            if low_battery and self.prev_charger_dist is not None:
+                charger_progress = self.prev_charger_dist - self.cur_charger_dist
+                if charger_progress > 0:
+                    reward += 0.03 * min(charger_progress, 5.0)
+                elif charger_progress < 0:
+                    reward += 0.01 * max(charger_progress, -5.0)
+
+            # Consider entering a small radius as "arrived".
+            arrived = self.cur_charger_dist < 3.0 and (
+                self.prev_charger_dist is None or self.prev_charger_dist >= 3.0
+            )
+            if arrived:
+                if battery_now > 20.0:
+                    reward -= 0.2
+                elif battery_now < 20.0:
+                    reward += 0.2
+
+        self.prev_target_dist = self.cur_target_dist
+        self.prev_charger_dist = self.cur_charger_dist
 
         return [reward]
