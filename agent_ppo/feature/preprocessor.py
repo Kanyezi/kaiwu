@@ -264,10 +264,20 @@ class Preprocessor:
         # - 若 battery > 20：reward -= 0.2
         # - 若 battery < 20：reward += 0.2
         # - 若 battery == 20：reward += 0（不奖不惩）
+        #
+        # Rule C (battery-based deduction below 50):
+        # 当 battery < 50 时，额外扣分：
+        # penalty = 0.001 + 0.019 * clip((50 - battery) / 50, 0, 1)
+        # 即电量越低扣分越高，范围约为 [0.001, 0.02]。
         battery_now = float(self.battery)
         low_battery = battery_now < 20.0
 
         if self.cur_charger_dist is not None:
+            if battery_now < 50.0:
+                battery_penalty_ratio = np.clip((50.0 - battery_now) / 50.0, 0.0, 1.0)
+                battery_penalty = 0.001 + 0.019 * battery_penalty_ratio
+                reward -= battery_penalty
+
             if low_battery and self.prev_charger_dist is not None:
                 charger_progress = self.prev_charger_dist - self.cur_charger_dist
                 if charger_progress > 0:
