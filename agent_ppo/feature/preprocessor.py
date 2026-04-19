@@ -98,6 +98,7 @@ class Preprocessor:
         self.last_delivered = self.delivered
         self.delivered = hero.get("delivered", 0)
         self.step_no = obs.get("step_no", 0)
+        self.map_info = obs.get("map_info")
 
         self.stations = []
         self.chargers = []
@@ -238,6 +239,18 @@ class Preprocessor:
             return [1] * 8
 
         return legal_action
+    def cheack_wall(self,center,radius):
+        cx, cy = center
+
+        # 遍历该圈的外接正方形
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                # 只保留最外圈的点（曼哈顿距离或切比雪夫距离等于radius）
+                if max(abs(dx), abs(dy)) == radius:
+                    if self.map_info[cx+dx][cy+dy]:
+                        return 1
+        return 0
+
 
     def _reward_process(self):
         """Reward function.
@@ -346,8 +359,26 @@ class Preprocessor:
                 warehouse_arrival_reward_map = {0: 0.20, 1: 0.12, 2: 0.06, 3: 0.00}
                 reward += warehouse_arrival_reward_map.get(min(max(package_cnt, 0), 3), 0.00)
 
+        # 6. 靠墙惩罚
+        # map_info 为 21x21 二维表，智能体位于中心 [10][10]。
+        # 第一层(3x3)命中墙：-0.1；第二层(5x5)命中墙：-0.2。
+        # 两层命中时惩罚可叠加。
+        if self.map_info is not None:
+            center = [10, 10]
+            for i in range(1,3):
+                f = self.cheack_wall(center,i)
+                num = 3-i
+                if(f):
+                    reward -= num*0.1;
+                    break
+
+            
+                               
+            
+
         self.prev_target_dist = self.cur_target_dist
         self.prev_charger_dist = self.cur_charger_dist
         self.prev_warehouse_dist = self.cur_warehouse_dist
 
         return [reward]
+    
