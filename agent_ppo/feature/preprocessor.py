@@ -51,8 +51,9 @@ class Preprocessor:
     智运无人机预处理器，仅保留最少信息。
     """
 
-    def __init__(self):
+    def __init__(self, logger=None):
         self.reset()
+        self.logger = logger
 
     def reset(self):
         """Reset all internal state.
@@ -75,13 +76,15 @@ class Preprocessor:
         self.cur_warehouse_dist = None
         self.prev_warehouse_dist = None
         self.map_info = None
-        self.prev_reward_by_pos = {}
+        self.last_reward_log_step = -1
+        self.cur_npc_dist = None
 
         # Entities / 实体
         self.stations = []
         self.chargers = []
         self.warehouses = []
-        self.log = []
+        self.visited_positions = set()
+        self.npcs = []
 
     def _parse_obs(self, env_obs):
         """Parse essential fields from observation dict.
@@ -92,7 +95,13 @@ class Preprocessor:
         frame_state = obs["frame_state"]
 
         hero = frame_state["heroes"]
+        
+        #官方无人机
+        self.npcs = frame_state["npcs"]
+
+
         self.cur_pos = (hero["pos"]["x"], hero["pos"]["z"])
+        self.score = hero.get("score",0)
 
         self.battery = hero.get("battery", self.battery_max)
         self.battery_max = hero.get("battery_max", 100)
@@ -214,6 +223,44 @@ class Preprocessor:
         battery_low = 1.0 if (self.battery / max(self.battery_max, 1)) < 0.3 else 0.0
         indicators = np.array([has_package, battery_low, target_visible])
 
+        # 5. Wall perception features (8D) —— 新增
+        wall_features = self._get_wall_features()
+
+        # 6. Nearest charger feature (3D) —— 新增
+        if len(self.chargers) > 0:
+            nearest_charger = min(self.chargers, key=lambda c: 
+                np.sqrt((c["pos"]["x"] - self.cur_pos[0])**2 + (c["pos"]["z"] - self.cur_pos[1])**2))
+            full_feat = _get_pos_feature(True, self.cur_pos, (nearest_charger["pos"]["x"], nearest_charger["pos"]["z"]))
+            charger_feat = full_feat[[0, 1, 2, 5]]   # found, dir_x, dir_y, dist
+        else:
+            charger_feat = np.array([0.0, 0.0, 0.0, 1.0])  # found=0, dir=0, dist=1
+
+        # 7. Nearest warehouse feature (3D) —— 新增
+        if len(self.warehouses) > 0:
+            nearest_warehouse = min(self.warehouses, key=lambda w: 
+                (w["pos"]["x"] - self.cur_pos[0])**2 + (w["pos"]["z"] - self.cur_pos[1])**2)
+            full_feat = _get_pos_feature(True, self.cur_pos, 
+                                        (nearest_warehouse["pos"]["x"], nearest_warehouse["pos"]["z"]))
+            warehouse_feat = full_feat[[0, 1, 2, 5]]   # found, dir_x, dir_y, dist
+        else:
+            warehouse_feat = np.array([0.0, 0.0, 0.0, 1.0])
+
+        # 8. 官方无人机
+        # 8. 官方无人机（NPC）特征与距离
+        if len(self.npcs) > 0:
+            # 找出最近 NPC 及其距离平方
+            nearest_npc = min(self.npcs, key=lambda n:
+                (n["pos"]["x"] - self.cur_pos[0])**2 + (n["pos"]["z"] - self.cur_pos[1])**2)
+            dist_sq = (nearest_npc["pos"]["x"] - self.cur_pos[0])**2 + (nearest_npc["pos"]["z"] - self.cur_pos[1])**2
+            self.cur_npc_dist = np.sqrt(dist_sq)   # 保存实际距离，用于奖励函数
+
+            full_feat = _get_pos_feature(True, self.cur_pos,
+                                        (nearest_npc["pos"]["x"], nearest_npc["pos"]["z"]))
+            npc_feat = full_feat[[0, 1, 2, 5]]      # found, dir_x, dir_y, dist
+        else:
+            self.cur_npc_dist = None
+            npc_feat = np.array([0.0, 0.0, 0.0, 1.0])
+
         # Concatenate features (Total 22D / 合计 22D)
         feature = np.concatenate(
             [
@@ -221,6 +268,10 @@ class Preprocessor:
                 station_feat,
                 np.array(legal_action, dtype=float),
                 indicators,
+                wall_features,
+                charger_feat,       # 3 新增
+                warehouse_feat,     # 3 新增
+                npc_feat,
             ]
         )
 
@@ -253,13 +304,40 @@ class Preprocessor:
                     if not self.map_info[cx+dx][cy+dy]:
                         return 1
         return 0
+    def _get_wall_features(self):
+        """返回长度为 8 的列表，表示 8 个动作方向正前方一格是否有墙（1=墙，0=可通行）。"""
+        if self.map_info is None:
+            return [0.0] * 8
+
+        # map_info 是 21x21 的局部栅格，智能体位于中心 (10, 10)
+        cx, cy = 10, 10
+        # 方向顺序必须与实际动作空间严格一致：左上(0) -> 上(1) -> 右上(2) -> 右(3) -> 右下(4) -> 下(5) -> 左下(6) -> 左(7)
+        dirs = [
+            (-1, 1),  # 0: 左上
+            (0, 1),   # 1: 上
+            (1, 1),   # 2: 右上
+            (1, 0),   # 3: 右
+            (1, -1),  # 4: 右下
+            (0, -1),  # 5: 下
+            (-1, -1), # 6: 左下
+            (-1, 0),  # 7: 左
+        ]
+        wall_flags = []
+        for dx, dy in dirs:
+            nx, ny = cx + dx, cy + dy
+            # 检查是否在 21x21 范围内，且 map_info 中 0 表示障碍物（墙），1 表示可通行
+            if 0 <= nx < 21 and 0 <= ny < 21:
+                wall_flags.append(0.0 if self.map_info[nx][ny] else 1.0)
+            else:
+                wall_flags.append(1.0)  # 边界外视为墙
+        return wall_flags
 
     def reward_log(self,name,num):
         list = {
             "name":name,
             "val":num
         }
-        # self.log(f"[reward]:{list}")
+        self.logger.info(f"[reward]:{list}")
 
 
     def _reward_process(self):
@@ -272,8 +350,9 @@ class Preprocessor:
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
-            reward += 1.5 * newly_delivered
-            self.reward_log("Delivery",1.5 * newly_delivered)
+            num = 4 * newly_delivered
+            reward += num
+            self.reward_log("Delivery",num)
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
@@ -285,15 +364,11 @@ class Preprocessor:
         # - 若 progress > 0（靠近目标驿站）：reward += 0.015 * min(progress, 5.0)
         # - 若 progress < 0（远离目标驿站）：reward += 0.01 * max(progress, -5.0)
         # 说明：靠近奖励系数 0.015 大于远离惩罚系数 0.01。
-        if self.cur_target_dist is not None:
-            if self.prev_target_dist is not None:
-                progress = self.prev_target_dist - self.cur_target_dist
-                if progress > 0:
-                    reward += 0.015 * min(progress, 5.0)
-                    self.reward_log("Distance",0.015 * min(progress, 5.0))
-                elif progress < 0:
-                    reward += 0.01 * max(progress, -5.0)
-                    self.reward_log("Distance",0.01 * max(progress, -5.0))
+        if len(self.packages) > 0 and self.cur_target_dist is not None and self.prev_target_dist is not None:
+            progress = self.prev_target_dist - self.cur_target_dist
+            num = 0.03 * progress
+            reward += num
+            self.reward_log("Distance",num)
 
 
         # 4. Charger shaping & arrival reward / 充电桩塑形与到达奖励
@@ -321,6 +396,20 @@ class Preprocessor:
                 num = (max(0,(self.battery_max*0.3)-self.battery)/self.battery_max*0.3)*2
                 reward += num
                 self.reward_log("Charger",num)
+        
+        
+        if self.cur_charger_dist is not None:
+            battery_ratio = self.battery / max(self.battery_max, 1)
+            if battery_ratio < 0.3 and self.prev_charger_dist is not None:
+                charger_progress = self.prev_charger_dist - self.cur_charger_dist
+                if charger_progress > 0:
+                    num = 0.07 * charger_progress
+                    reward += num
+                    self.reward_log("ChargerApproach", num)
+                elif charger_progress < 0:
+                    num = 0.03 * charger_progress
+                    reward += num
+                    self.reward_log("ChargerApproach", num)
 
         # 5. Replenishment reward to warehouse / 补货前往仓库奖励
         # 仅在手上没有包裹时触发：空手靠近大仓给奖励，其余情况不奖励。
@@ -330,45 +419,41 @@ class Preprocessor:
         # 到达判定：cur_warehouse_dist < 3.0 且上一帧不在该半径内。
         # 到达奖励：空手时 reward += 0.20。
         if not self.packages and self.cur_warehouse_dist is not None:
+            arrived = self.cur_warehouse_dist < 3.0 and (
+                self.prev_warehouse_dist is None or self.prev_warehouse_dist >= 3.0
+            )
+            if arrived:
+                num = 0.5
+                reward += num
+                self.reward_log("WarehouseArrival", num)
             if self.prev_warehouse_dist is not None:
                 restock_progress = self.prev_warehouse_dist - self.cur_warehouse_dist
                 if restock_progress > 0:
-                    num = 0.02 * min(restock_progress, 5.0)
+                    num = 0.03 * restock_progress
                     reward += num
                     self.reward_log("Replenishment",num)
                 elif restock_progress < 0:
-                    num = 0.01 * max(restock_progress, -5.0)
+                    num = 0.03 * restock_progress
                     reward += num
                     self.reward_log("Replenishment",num)
         
-        # 6. 靠墙惩罚
-        # map_info 为 21x21 二维表，智能体位于中心 [10][10]。
-        # 第一层(3x3)命中墙：-0.1；第二层(5x5)命中墙：-0.2。
-        # 两层命中时惩罚可叠加。
-        if self.map_info is not None:
-            center = [10, 10]
-            for i in range(1,3):
-                f = self.cheack_wall(center,i)
-                te = 3-i
-                if(f):
-                    num = -te*0.1;
-                    reward += num;
-                    self.reward_log("Replenishment",num)
-                    break
-
-        # 7. Revisit non-improvement penalty / 同路径不提升惩罚
-        # If revisiting the same grid with reward <= previous reward at this grid, apply extra penalty.
-        # 若回到同一位置且当前步奖励 <= 该位置上次奖励，则额外惩罚。
+        # 6. Revisit non-improvement penalty / 同路径不提升惩罚
         pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
-        raw_step_reward = reward
-        prev_reward_at_pos = self.prev_reward_by_pos.get(pos_key)
-        if prev_reward_at_pos is not None and raw_step_reward <= prev_reward_at_pos:
-            num = -0.01
+        
+        if pos_key not in self.visited_positions:
+            # 首次访问奖励，随探索进度衰减
+            explore_bonus = 0.02 * (0.99 ** len(self.visited_positions))
+            reward += explore_bonus
+            self.reward_log("FirstVisit", explore_bonus)
+            self.visited_positions.add(pos_key)
+
+        # 7.靠近官方机器人扣分
+        if self.cur_npc_dist is not None and self.cur_npc_dist <= 2.0:
+            num = -0.5 * (2-self.cur_npc_dist)
             reward += num
-            self.reward_log("Revisit",num)
+            self.reward_log("NPCTooClose", -0.5)
 
 
-        self.prev_reward_by_pos[pos_key] = raw_step_reward
         self.prev_target_dist = self.cur_target_dist
         self.prev_charger_dist = self.cur_charger_dist
         self.prev_warehouse_dist = self.cur_warehouse_dist

@@ -38,7 +38,7 @@ class Agent(BaseAgent):
             eps=1e-8,
         )
         self.algorithm = Algorithm(self.model, self.optimizer, self.device, logger, monitor)
-        self.preprocessor = Preprocessor()
+        self.preprocessor = Preprocessor(logger=logger)
         self.last_action = -1
         super().__init__(agent_type, device, logger, monitor)
 

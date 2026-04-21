@@ -18,12 +18,20 @@ class Config:
     STATION_DIM = 7 * 1
     LEGAL_ACT_DIM = 8
     INDICATOR_DIM = 3
+    WALL_DIM = 8                # 新增：墙壁感知特征
+    CHARGER_DIM = 4             # 新增：充电桩相对特征
+    WAREHOUSE_DIM = 4           # 新增：仓库相对特征‘
+    NPC_DIM = 4
 
     FEATURES = [
         HERO_STATE_DIM,
         STATION_DIM,
         LEGAL_ACT_DIM,
         INDICATOR_DIM,
+        WALL_DIM,               # 新增
+        CHARGER_DIM,            # 新增
+        WAREHOUSE_DIM,          # 新增
+        NPC_DIM,
     ]
     FEATURE_SPLIT_SHAPE = FEATURES
     FEATURE_LEN = sum(FEATURES)
