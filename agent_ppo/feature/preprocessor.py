@@ -418,7 +418,7 @@ class Preprocessor:
 
 
         # 3. 目标距离塑形奖励
-        if self.cur_target_dist is not None and self.prev_target_dist is not None:
+        if self.cur_target_dist is not None and self.prev_target_dist is not None and len(self.packages):
             progress = self.prev_target_dist - self.cur_target_dist
             num = 0.03 * progress
             reward += num
@@ -458,7 +458,7 @@ class Preprocessor:
         # 7. 补货奖励
         cha = len(self.packages) - self.prev_package
         if cha > 0:
-            num = 0.5 * cha
+            num = 1.5 * cha
             reward += num
             self.reward_log("WarehouseReward", num)
             chu("补货奖励",num)
@@ -468,8 +468,8 @@ class Preprocessor:
         # 8. 重复惩罚
         pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
         if self.prev_prev_pos is not None and self.prev_pos is not None:
-            if pos_key == self.prev_prev_pos and pos_key != self.prev_pos:
-                num = -0.005
+            if pos_key == self.prev_prev_pos:
+                num = -0.01
                 reward += num
                 self.reward_log("RoundTrip", num)
                 chu("重复惩罚",num)
