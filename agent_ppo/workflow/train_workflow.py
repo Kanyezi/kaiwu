@@ -111,7 +111,7 @@ class EpisodeRunner:
                 act = self.agent.action_process(act_data)
 
                 
-                self.logger.info(f"[MOVE]:action:{act}")
+                # self.logger.info(f"[MOVE]:action:{act}")
 
                 # Environment step / 环境交互
                 env_reward, env_obs = self.env.step(act)
