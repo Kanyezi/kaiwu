@@ -409,7 +409,7 @@ class Preprocessor:
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
-            num = 3 * newly_delivered
+            num = 5 * newly_delivered
             reward += num
             self.reward_log("Delivery",num)
 
@@ -448,11 +448,11 @@ class Preprocessor:
                 progress = self.prev_charger_dist - self.cur_charger_dist
                 reward += 0.03 * progress
                 self.reward_log("ChargerDeparture", 0.03 * progress)
-            reward -= 0.01
-            self.reward_log("LowBatteryPenalty", -0.01)
+            reward -= 0.05
+            self.reward_log("LowBatteryPenalty", -0.1)
 
         # 5. 补货前往仓库奖励
-        if not self.packages and self.cur_warehouse_dist is not None and self.prev_warehouse_dist is not None:
+        if not len(self.packages) and self.cur_warehouse_dist is not None and self.prev_warehouse_dist is not None:
             progress = self.prev_warehouse_dist - self.cur_warehouse_dist
             num = 0.03*progress
             reward += num
@@ -476,7 +476,7 @@ class Preprocessor:
         pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
         if self.prev_prev_pos is not None and self.prev_pos is not None:
             if pos_key == self.prev_prev_pos:
-                num = -0.02
+                num = -0.3
                 reward += num
                 self.reward_log("RoundTrip", num)
                 chu("重复惩罚",num)
@@ -489,7 +489,7 @@ class Preprocessor:
 
         # 8.1首次访问奖励，随探索进度衰减
         if pos_key not in self.visited_positions:
-            explore_bonus = 0.008 * (0.992 ** len(self.visited_positions))
+            explore_bonus = 0.008 * (0.995 ** len(self.visited_positions))
             reward += explore_bonus
             self.reward_log("FirstVisit", explore_bonus)
             self.visited_positions.add(pos_key)
