@@ -159,6 +159,7 @@ class Preprocessor:
         self.battery = hero.get("battery", self.battery_max)
         self.battery_max = hero.get("battery_max", 100)
         self.packages = hero.get("packages", [])
+        
 
         self.last_delivered = self.delivered
         self.delivered = hero.get("delivered", 0)
@@ -416,9 +417,11 @@ class Preprocessor:
         reward -= 0.001
         self.reward_log("Step",-0.001)
 
+        self.battery_low = self.battery < self.battery_max * 0.3
+
 
         # 3. 目标距离塑形奖励
-        if self.cur_target_dist is not None and self.prev_target_dist is not None and len(self.packages):
+        if not self.battery_low and self.cur_target_dist is not None and self.prev_target_dist is not None and len(self.packages):
             progress = self.prev_target_dist - self.cur_target_dist
             num = 0.03 * progress
             reward += num
@@ -438,11 +441,15 @@ class Preprocessor:
                 reward += 1.5 * deficit   # 最高 0.45
                 self.reward_log("ChargerArrival", 1.5 * deficit)
 
-        # 10. 满电停留惩罚（催促离开充电桩）
-        if self.cur_charger_dist is not None and self.cur_charger_dist < 3.0:
-            if self.battery >= self.battery_max * 0.95:  # 电量高于95%
-                reward -= 0.01
-                self.reward_log("ChargerIdlePenalty", -0.01)
+        # 10. 低电量惩罚
+        if not self.battery_low:  # 电量低于30%
+            #远离充电桩惩罚，靠近不奖励
+            if self.packages and self.cur_charger_dist is not None and self.prev_charger_dist is not None:
+                progress = self.prev_charger_dist - self.cur_charger_dist
+                reward += 0.03 * progress
+                self.reward_log("ChargerDeparture", 0.03 * progress)
+            reward -= 0.01
+            self.reward_log("LowBatteryPenalty", -0.01)
 
         # 5. 补货前往仓库奖励
         if not self.packages and self.cur_warehouse_dist is not None and self.prev_warehouse_dist is not None:
@@ -469,13 +476,16 @@ class Preprocessor:
         pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
         if self.prev_prev_pos is not None and self.prev_pos is not None:
             if pos_key == self.prev_prev_pos:
-                num = -0.01
+                num = -0.02
                 reward += num
                 self.reward_log("RoundTrip", num)
                 chu("重复惩罚",num)
         chu("重复_cur",pos_key)
         chu("重复_prev",self.prev_pos)
         chu("重复_prev_prev",self.prev_prev_pos)
+
+        #转向惩罚
+
 
         # 8.1首次访问奖励，随探索进度衰减
         if pos_key not in self.visited_positions:
@@ -486,7 +496,7 @@ class Preprocessor:
             chu("首次访问奖励", explore_bonus)
 
         # 9.靠近官方机器人扣分
-        if self.cur_npc_dist is not None and self.cur_npc_dist <= 2.0:
+        if self.cur_npc_dist is not None and self.cur_npc_dist <= 3.0:
             num = -0.5 * (4-self.cur_npc_dist)
             reward += num
             self.reward_log("NPCTooClose", -0.5)
