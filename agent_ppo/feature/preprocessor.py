@@ -442,7 +442,7 @@ class Preprocessor:
                 self.reward_log("ChargerArrival", 1.5 * deficit)
 
         # 10. 低电量惩罚
-        if not self.battery_low:  # 电量低于30%
+        if self.battery_low:  # 电量低于30%
             #远离充电桩惩罚，靠近不奖励
             if self.packages and self.cur_charger_dist is not None and self.prev_charger_dist is not None:
                 progress = self.prev_charger_dist - self.cur_charger_dist
