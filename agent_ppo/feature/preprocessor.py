@@ -425,8 +425,8 @@ class Preprocessor:
                 reward += num
                 self.reward_log("ChargerDeparture", num)
                 chu("充电桩靠近奖励",num)
-            reward -= 0.05
-            self.reward_log("低电量惩罚", -0.05)
+            reward -= 0.02
+            self.reward_log("低电量惩罚", -0.02)
 
         # 5. 补货前往仓库奖励
         if not len(self.packages) and self.warehouse_pos is not None and self.prev_map_info is not None:
@@ -462,12 +462,12 @@ class Preprocessor:
 
 
         # 8.1首次访问奖励，随探索进度衰减
-        if pos_key not in self.visited_positions:
-            explore_bonus = 0.008 * (0.992 ** len(self.visited_positions))
-            reward += explore_bonus
-            self.reward_log("FirstVisit", explore_bonus)
-            self.visited_positions.add(pos_key)
-            chu("首次访问奖励", explore_bonus)
+        # if pos_key not in self.visited_positions:
+        #     explore_bonus = 0.008 * (0.992 ** len(self.visited_positions))
+        #     reward += explore_bonus
+        #     self.reward_log("FirstVisit", explore_bonus)
+        #     self.visited_positions.add(pos_key)
+        #     chu("首次访问奖励", explore_bonus)
 
         # 9.靠近官方机器人扣分
         if self.cur_npc_dist is not None and self.cur_npc_dist <= 3.0:
