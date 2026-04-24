@@ -13,7 +13,7 @@ Drone Delivery feature preprocessor.
 
 import numpy as np
 from agent_ppo.conf.conf import Config
-from agent_ppo.feature.dbfs import min_distance_with_fov
+from agent_ppo.feature.dbfs import DBFS
 
 def norm(v, max_v, min_v=0):
     """Normalize v to [0, 1].
@@ -122,13 +122,8 @@ class Preprocessor:
         self.delivered = 0
         self.last_delivered = 0
         self.step_no = 0
-        self.cur_target_dist = None
-        self.prev_target_dist = None
-        self.cur_charger_dist = None
-        self.prev_charger_dist = None
-        self.cur_warehouse_dist = None
-        self.prev_warehouse_dist = None
         self.map_info = None
+        self.prev_map_info = None
         self.last_reward_log_step = -1
         self.cur_npc_dist = None
 
@@ -202,6 +197,8 @@ class Preprocessor:
         # 目标驿站优先，然后按距离排序
         target_ids = set(self.packages)
         target_stations = [s for s in self.stations if s.get("config_id", 0) in target_ids]
+        
+        
 
         # 找到最近的充电桩
         if len(self.chargers) > 0:
@@ -214,9 +211,8 @@ class Preprocessor:
                 self.cur_pos,
                 (nearest_charger["pos"]["x"], nearest_charger["pos"]["z"]),
             )
-            self.cur_charger_dist = min_distance_with_fov(self.cur_pos, (nearest_charger["pos"]["x"], nearest_charger["pos"]["z"]), self.map_info)
+            self.charger_pos = (nearest_charger["pos"]["x"], nearest_charger["pos"]["z"])
         else:
-            self.cur_charger_dist = None
             charger_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
 
         # 找到最近的仓库
@@ -230,22 +226,21 @@ class Preprocessor:
                 self.cur_pos,
                 (nearest_warehouse["pos"]["x"], nearest_warehouse["pos"]["z"]),
             )
-            self.cur_warehouse_dist = min_distance_with_fov(self.cur_pos, (nearest_warehouse["pos"]["x"], nearest_warehouse["pos"]["z"]), self.map_info)
+            self.warehouse_pos = (nearest_warehouse["pos"]["x"], nearest_warehouse["pos"]["z"])
         else:
-            self.cur_warehouse_dist = None
+            self.warehouse_pos = None
             warehouse_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
 
         # 找到最近的目标驿站
         chu("最近的目标",target_stations)
         if len(target_stations) > 0:
             #找到最近的目标驿站
-            min_target = min(target_stations, key=lambda s: np.sqrt((s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2))
-            self.cur_target_dist = min_distance_with_fov(self.cur_pos, (min_target["pos"]["x"], min_target["pos"]["z"]), self.map_info)
+            self.near_target = min(target_stations, key=lambda s: np.sqrt((s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2))
+            self.target_pos = (self.near_target["pos"]["x"], self.near_target["pos"]["z"])
         else:
-            self.cur_target_dist = None
+            self.target_pos = None
 
         # 找到最近的npc
-        
         if len(self.npcs) > 0:
             nearest_npc = min(
                 self.npcs,
@@ -256,7 +251,7 @@ class Preprocessor:
                 self.cur_pos,
                 (nearest_npc["pos"]["x"], nearest_npc["pos"]["z"]),
             )
-            self.cur_npc_dist = min_distance_with_fov(self.cur_pos, (nearest_npc["pos"]["x"], nearest_npc["pos"]["z"]), self.map_info)
+            self.cur_npc_dist = np.sqrt((nearest_npc["pos"]["x"] - self.cur_pos[0]) ** 2 + (nearest_npc["pos"]["z"] - self.cur_pos[1]) ** 2)
         else:
             self.cur_npc_dist = None
             npc_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
@@ -412,49 +407,34 @@ class Preprocessor:
 
 
         # 3. 目标距离塑形奖励
-        if not self.battery_low and self.cur_target_dist is not None and self.prev_target_dist is not None and len(self.packages):
-            progress = self.prev_target_dist - self.cur_target_dist
+        if not self.battery_low and len(self.packages) and self.target_pos is not None and self.prev_map_info is not None and self.map_info is not None:
+            dbf = DBFS(self.prev_map_info, self.map_info, self.cur_pos, self.prev_pos, self.target_pos)
+            progress = dbf.main()
             num = 0.03 * progress
             reward += num
-            self.reward_log("Distance",num)
+            self.reward_log("目标靠近奖励",num)
             chu("目标奖励",num)
 
-        chu("目标距离_cur",self.cur_target_dist)
-        chu("目标距离_prev",self.prev_target_dist)
-
-
-        # 4. 充电桩到达奖励（低电量时到达充电桩给予奖励）
-        if self.cur_charger_dist is not None:
-            arrived = self.cur_charger_dist < 3.0 and (self.prev_charger_dist is None or self.prev_charger_dist >= 3.0)
-            if arrived:
-                # 电量缺口比例（低于30%的部分）
-                deficit = max(0, 0.3 - self.battery / self.battery_max)
-                reward += 1.5 * deficit   # 最高 0.45
-                self.reward_log("ChargerArrival", 1.5 * deficit)
-
-        # 10. 低电量惩罚
+        # 4. 低电量惩罚
         if self.battery_low:  # 电量低于30%
             #电桩
-            if self.packages and self.cur_charger_dist is not None and self.prev_charger_dist is not None:
-                progress = self.prev_charger_dist - self.cur_charger_dist
-                reward += 0.03 * progress
-                self.reward_log("ChargerDeparture", 0.03 * progress)
-                chu("充电桩靠近奖励",progress)
+            if self.packages and self.prev_map_info is not None and self.map_info is not None:
+                dbf = DBFS(self.prev_map_info, self.map_info, self.cur_pos, self.prev_pos, self.charger_pos)
+                progress = dbf.main()
+                num = 0.03 * progress
+                reward += num
+                self.reward_log("ChargerDeparture", num)
+                chu("充电桩靠近奖励",num)
             reward -= 0.05
-            self.reward_log("LowBatteryPenalty", -0.1)
-        chu("充电桩距离_cur",self.cur_charger_dist)
-        chu("充电桩距离_prev",self.prev_charger_dist)
+            self.reward_log("低电量惩罚", -0.05)
 
         # 5. 补货前往仓库奖励
-        if not len(self.packages) and self.cur_warehouse_dist is not None and self.prev_warehouse_dist is not None:
-            progress = self.prev_warehouse_dist - self.cur_warehouse_dist
+        if not len(self.packages) and self.warehouse_pos is not None and self.prev_map_info is not None:
+            dbf = DBFS(self.prev_map_info, self.map_info, self.cur_pos, self.prev_pos, self.warehouse_pos)
+            progress = dbf.main()
             num = 0.03*progress
             reward += num
-            self.reward_log("WarehouseArrival", num)
-            chu("补货奖励",num)
-
-        chu("仓库_cur",self.cur_warehouse_dist)
-        chu("仓库_prev",self.prev_warehouse_dist)
+            self.reward_log("仓库靠近奖励", num)
 
         # 7. 补货奖励
         cha = len(self.packages) - self.prev_package
@@ -497,9 +477,7 @@ class Preprocessor:
             chu("官方机器人奖励", num)
         chu("官方机器人距离", self.cur_npc_dist)
 
-        self.prev_target_dist = self.cur_target_dist
-        self.prev_charger_dist = self.cur_charger_dist
-        self.prev_warehouse_dist = self.cur_warehouse_dist
+        self.prev_map_info = self.map_info
         self.prev_prev_pos = self.prev_pos
         self.prev_pos = self.cur_pos
         self.prev_battery = self.battery

@@ -1,159 +1,239 @@
 import heapq
 from math import sqrt
-from typing import List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 
 Coord = Tuple[int, int]
 
 
-def min_distance_with_fov(
-	start: Coord,
-	destination: Coord,
-	vision: Sequence[Sequence[int]],
-) -> float:
-	"""计算从起点到目的地的最小距离。
+class DBFS:
+	"""两帧地图拼接 + 双起点最短路评估。"""
+	def __init__(self, prev_map, cur_map, cur_pos, prev_pos, target_pos):
+		self.prev_map = prev_map
+		self.cur_map = cur_map
+		self.cur_pos = cur_pos
+		self.prev_pos = prev_pos
+		self.target_pos = target_pos
 
-	参数:
-	- start: 起始绝对坐标 (x, y)
-	- destination: 目的地绝对坐标 (x, y)
-	- vision: 21x21 视野矩阵，中心点对应 start。
-	  1 表示可通行，0 表示障碍。
+	def jia_map(self):
+		#拼接地图两个地图都为21*21，移动量最大为1，按照移动方向进行拼接
+		
+		#计算移动方向
+		dx = self.prev_pos[0] - self.cur_pos[0]
+		dy = self.prev_pos[1] - self.cur_pos[1]
 
-	返回:
-	- 最小距离（直走=1，斜走=sqrt(2)）
-	- 不可达时返回 -1.0
+		#指定新地图#为填空符合23*23
+		map = [["#"]*23 for _ in range(23)]
+		#新地图中心为prev_map,之后按照移动方向拼接cur_map
+		for i in range(21):
+			for j in range(21):
+				map[i + 1][j + 1] = self.prev_map[i][j]
+		for i in range(21):
+			for j in range(21):
+				map[i + 1 + dx][j + 1 + dy] = self.cur_map[i][j]
 
-	说明:
-	- 当 destination 在 21x21 范围内时，使用 A* 返回视野内最短路。
-	- 当 destination 在范围外时，先在视野内绕过障碍走到某个可达边界格，
-	  再加上该边界格到 destination 的最短八方向距离（视野外默认不含障碍信息）。
-	- 搜索阶段只使用整数代价比较，不计算 sqrt；仅在最终输出时还原。
-	"""
-	size = 21
-	center = size // 2
-	scale = 1_000_000
-	straight_cost = scale
-	diag_cost = 1_414_214
-	inf_cost = 10**18
+		return map
 
-	def final_distance(straight_steps: int, diag_steps: int) -> float:
-		return straight_steps + diag_steps * sqrt(2.0)
+	def dfs(self, start):
+		#使用a*计算起点到目标的分别最短路，1代表可以走，0代表障碍物，#意味未知，可以把挨着#格子的当成边。如果视野之外，就拼接边界距离与边界到目标的直线距离
+		#起点 (x,y)
+		start
+		#目标点
+		self.target_pos
 
-	def split_steps(abs_dx: int, abs_dy: int) -> Tuple[int, int]:
-		diag_steps = min(abs_dx, abs_dy)
-		straight_steps = max(abs_dx, abs_dy) - diag_steps
-		return diag_steps, straight_steps
+		grid = self.jia_map()
+		size = 23
+		center = 11
+		scale = 1_000_000
+		straight_cost = scale
+		diag_cost = 1_414_214
+		inf_cost = 10**18
 
-	def scaled_by_delta(abs_dx: int, abs_dy: int) -> int:
-		diag_steps, straight_steps = split_steps(abs_dx, abs_dy)
-		return diag_steps * diag_cost + straight_steps * straight_cost
+		directions = (
+			(1, 0),
+			(-1, 0),
+			(0, 1),
+			(0, -1),
+			(1, 1),
+			(1, -1),
+			(-1, 1),
+			(-1, -1),
+		)
 
-	if len(vision) != size or any(len(row) != size for row in vision):
-		raise ValueError("vision 必须是 21x21 的二维矩阵")
+		def split_steps(abs_dx, abs_dy):
+			diag_steps = min(abs_dx, abs_dy)
+			straight_steps = max(abs_dx, abs_dy) - diag_steps
+			return diag_steps, straight_steps
 
-	if vision[center][center] != 1:
-		return -1.0
+		def scaled_by_delta(abs_dx, abs_dy):
+			diag_steps, straight_steps = split_steps(abs_dx, abs_dy)
+			return diag_steps * diag_cost + straight_steps * straight_cost
 
-	sx, sy = start
-	dx, dy = destination
+		def final_distance(straight_steps, diag_steps):
+			return straight_steps + diag_steps * sqrt(2.0)
 
-	# 目的地在视野坐标系中的索引
-	target_i = center + (dx - sx)
-	target_j = center + (dy - sy)
-	target_in_vision = 0 <= target_i < size and 0 <= target_j < size
+		def abs_to_local(pos):
+			return center + (pos[0] - self.prev_pos[0]), center + (pos[1] - self.prev_pos[1])
 
-	# 八方向：每步代价为 1
-	directions = (
-		(1, 0),
-		(-1, 0),
-		(0, 1),
-		(0, -1),
-		(1, 1),
-		(1, -1),
-		(-1, 1),
-		(-1, -1),
-	)
+		def local_to_abs(i, j):
+			return self.prev_pos[0] + (i - center), self.prev_pos[1] + (j - center)
 
-	# g_score: 起点到当前格的最小整数缩放代价
-	g_score: List[List[int]] = [[inf_cost] * size for _ in range(size)]
-	g_score[center][center] = 0
-	straight_steps: List[List[int]] = [[0] * size for _ in range(size)]
-	diag_steps: List[List[int]] = [[0] * size for _ in range(size)]
+		si, sj = abs_to_local(start)
+		ti, tj = abs_to_local(self.target_pos)
 
-	# 小顶堆元素: (f, g, i, j)
-	heap: List[Tuple[int, int, int, int]] = []
-	start_h = (
-		scaled_by_delta(abs(target_i - center), abs(target_j - center)) if target_in_vision else 0
-	)
-	heapq.heappush(heap, (start_h, 0, center, center))
+		if not (0 <= si < size and 0 <= sj < size) or grid[si][sj] != 1:
+			return -1
 
-	best_outside = inf_cost
-	best_outside_straight = 0
-	best_outside_diag = 0
+		target_in_map = 0 <= ti < size and 0 <= tj < size
+		if target_in_map and grid[ti][tj] != 1:
+			return -1
 
-	while heap:
-		f, g, i, j = heapq.heappop(heap)
+		g_score = [[inf_cost] * size for _ in range(size)]
+		g_score[si][sj] = 0
+		straight_steps = [[0] * size for _ in range(size)]
+		diag_steps = [[0] * size for _ in range(size)]
 
-		if g != g_score[i][j]:
-			continue
+		heap = []
+		start_h = scaled_by_delta(abs(ti - si), abs(tj - sj)) if target_in_map else 0
+		heapq.heappush(heap, (start_h, 0, si, sj))
 
-		if target_in_vision:
-			if i == target_i and j == target_j:
-				return final_distance(straight_steps[i][j], diag_steps[i][j])
-		else:
-			# 当目标在视野外时，若当前最小可能代价都不优于 best_outside，可提前结束
-			if f >= best_outside:
-				break
+		best_outside = inf_cost
+		best_outside_straight = 0
+		best_outside_diag = 0
 
-			if i in (0, size - 1) or j in (0, size - 1):
-				x = sx + (i - center)
-				y = sy + (j - center)
-				out_diag, out_straight = split_steps(abs(dx - x), abs(dy - y))
-				outside_cost = out_diag * diag_cost + out_straight * straight_cost
-				candidate = g + outside_cost
-				if candidate < best_outside:
-					best_outside = candidate
-					best_outside_straight = straight_steps[i][j] + out_straight
-					best_outside_diag = diag_steps[i][j] + out_diag
-
-		for di, dj in directions:
-			ni, nj = i + di, j + dj
-			if not (0 <= ni < size and 0 <= nj < size):
-				continue
-			if vision[ni][nj] != 1:
+		while heap:
+			f, g, i, j = heapq.heappop(heap)
+			if g != g_score[i][j]:
 				continue
 
-			is_diag = 1 if di != 0 and dj != 0 else 0
-			move_cost = diag_cost if is_diag else straight_cost
-			ng = g + move_cost
-			if ng >= g_score[ni][nj]:
-				continue
-
-			g_score[ni][nj] = ng
-			straight_steps[ni][nj] = straight_steps[i][j] + (0 if is_diag else 1)
-			diag_steps[ni][nj] = diag_steps[i][j] + is_diag
-			if target_in_vision:
-				h = scaled_by_delta(abs(target_i - ni), abs(target_j - nj))
+			if target_in_map:
+				if i == ti and j == tj:
+					ans = final_distance(straight_steps[i][j], diag_steps[i][j])
+					return ans
 			else:
-				# 视野外目标：用到目标的最短八方向距离下界做分支限界
-				x = sx + (ni - center)
-				y = sy + (nj - center)
-				h = scaled_by_delta(abs(dx - x), abs(dy - y))
-			heapq.heappush(heap, (ng + h, ng, ni, nj))
+				if f >= best_outside:
+					break
 
-	# 视野内目的地但未访问到，说明不可达
-	if target_in_vision:
-		return -1.0
+				is_boundary = False
+				for di, dj in directions:
+					ni, nj = i + di, j + dj
+					if not (0 <= ni < size and 0 <= nj < size) or grid[ni][nj] == "#":
+						is_boundary = True
+						break
 
-	if best_outside == inf_cost:
-		return -1.0
-	return final_distance(best_outside_straight, best_outside_diag)
+				if is_boundary:
+					x, y = local_to_abs(i, j)
+					out_diag, out_straight = split_steps(abs(self.target_pos[0] - x), abs(self.target_pos[1] - y))
+					candidate = g + out_diag * diag_cost + out_straight * straight_cost
+					if candidate < best_outside:
+						best_outside = candidate
+						best_outside_straight = straight_steps[i][j] + out_straight
+						best_outside_diag = diag_steps[i][j] + out_diag
+
+			for di, dj in directions:
+				ni, nj = i + di, j + dj
+				if not (0 <= ni < size and 0 <= nj < size):
+					continue
+				if grid[ni][nj] != 1:
+					continue
+
+				is_diag = 1 if di != 0 and dj != 0 else 0
+				move_cost = diag_cost if is_diag else straight_cost
+				ng = g + move_cost
+				if ng >= g_score[ni][nj]:
+					continue
+
+				g_score[ni][nj] = ng
+				straight_steps[ni][nj] = straight_steps[i][j] + (0 if is_diag else 1)
+				diag_steps[ni][nj] = diag_steps[i][j] + is_diag
+				if target_in_map:
+					h = scaled_by_delta(abs(ti - ni), abs(tj - nj))
+				else:
+					x, y = local_to_abs(ni, nj)
+					h = scaled_by_delta(abs(self.target_pos[0] - x), abs(self.target_pos[1] - y))
+				heapq.heappush(heap, (ng + h, ng, ni, nj))
+
+		if target_in_map:
+			return -1
+
+		if best_outside == inf_cost:
+			return -1
+
+		ans = final_distance(best_outside_straight, best_outside_diag)
+		return ans
+
+	def main(self):
+		# self.prev_map = prev_map
+		# self.cur_map = cur_map
+		# self.cur_pos = cur_pos
+		# self.prev_pos = prev_pos
+		# self.target_pos = target_pos
+		self.map = self.jia_map()
+		#两次次路程
+		cur_dist = self.dfs(self.cur_pos)
+		prev_dist = self.dfs(self.prev_pos)
+		cha_dist = prev_dist-cur_dist
+		# print(cur_dist,prev_dist)
+
+		return cha_dist
+		pass
 
 if __name__ == "__main__":
-	DEMO_GRID_21x21 = [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]
-	ai_world_pos = (64, 64)
-	target_world_pos = (59,59)
+	prev_map = [
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+	]
+	cur_map = [
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+	]
+	prev_pos = (64, 64)
+	cur_pos = (64, 65)
+	target_pos = (64, 100)
 
-	result = min_distance_with_fov(ai_world_pos, target_world_pos, DEMO_GRID_21x21)
-	print(f"min_distance={result}")
-
+	dbf = DBFS(prev_map, cur_map, cur_pos, prev_pos, target_pos)
+	# ne_map = dbf.jia_map()
+	# for i in ne_map:
+	# 	for j in i:
+	# 		print(j, end=" ")
+	# 	print()
+	print(dbf.main())
+	pass
