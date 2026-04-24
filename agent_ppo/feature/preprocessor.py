@@ -13,7 +13,7 @@ Drone Delivery feature preprocessor.
 
 import numpy as np
 from agent_ppo.conf.conf import Config
-from dbfs import min_distance_with_fov
+from agent_ppo.feature.dbfs import min_distance_with_fov
 
 def norm(v, max_v, min_v=0):
     """Normalize v to [0, 1].
@@ -236,9 +236,11 @@ class Preprocessor:
             warehouse_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
 
         # 找到最近的目标驿站
+        chu("最近的目标",target_stations)
         if len(target_stations) > 0:
             #找到最近的目标驿站
-            self.cur_target_dist = min_distance_with_fov(self.cur_pos, (target_stations[0]["pos"]["x"], target_stations[0]["pos"]["z"]), self.map_info)
+            min_target = min(target_stations, key=lambda s: np.sqrt((s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2))
+            self.cur_target_dist = min_distance_with_fov(self.cur_pos, (min_target["pos"]["x"], min_target["pos"]["z"]), self.map_info)
         else:
             self.cur_target_dist = None
 
@@ -432,13 +434,16 @@ class Preprocessor:
 
         # 10. 低电量惩罚
         if self.battery_low:  # 电量低于30%
-            #远离充电桩惩罚，靠近不奖励
+            #电桩
             if self.packages and self.cur_charger_dist is not None and self.prev_charger_dist is not None:
                 progress = self.prev_charger_dist - self.cur_charger_dist
                 reward += 0.03 * progress
                 self.reward_log("ChargerDeparture", 0.03 * progress)
+                chu("充电桩靠近奖励",progress)
             reward -= 0.05
             self.reward_log("LowBatteryPenalty", -0.1)
+        chu("充电桩距离_cur",self.cur_charger_dist)
+        chu("充电桩距离_prev",self.prev_charger_dist)
 
         # 5. 补货前往仓库奖励
         if not len(self.packages) and self.cur_warehouse_dist is not None and self.prev_warehouse_dist is not None:
