@@ -176,7 +176,7 @@ class DBFS:
 		cur_dist = self.dfs(self.cur_pos)
 		prev_dist = self.dfs(self.prev_pos)
 		cha_dist = prev_dist-cur_dist
-		print(cur_dist,prev_dist)
+		# print(cur_dist,prev_dist)
 
 		return cha_dist
 		pass
