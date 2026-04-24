@@ -13,7 +13,7 @@ Drone Delivery feature preprocessor.
 
 import numpy as np
 from agent_ppo.conf.conf import Config
-
+from dbfs import min_distance_with_fov
 
 def norm(v, max_v, min_v=0):
     """Normalize v to [0, 1].
@@ -214,10 +214,7 @@ class Preprocessor:
                 self.cur_pos,
                 (nearest_charger["pos"]["x"], nearest_charger["pos"]["z"]),
             )
-            self.cur_charger_dist = min(
-                np.sqrt((c["pos"]["x"] - self.cur_pos[0]) ** 2 + (c["pos"]["z"] - self.cur_pos[1]) ** 2)
-                for c in self.chargers
-            )
+            self.cur_charger_dist = min_distance_with_fov(self.cur_pos, (nearest_charger["pos"]["x"], nearest_charger["pos"]["z"]), self.map_info)
         else:
             self.cur_charger_dist = None
             charger_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
@@ -233,20 +230,15 @@ class Preprocessor:
                 self.cur_pos,
                 (nearest_warehouse["pos"]["x"], nearest_warehouse["pos"]["z"]),
             )
-            self.cur_warehouse_dist = min(
-                np.sqrt((w["pos"]["x"] - self.cur_pos[0]) ** 2 + (w["pos"]["z"] - self.cur_pos[1]) ** 2)
-                for w in self.warehouses
-            )
+            self.cur_warehouse_dist = min_distance_with_fov(self.cur_pos, (nearest_warehouse["pos"]["x"], nearest_warehouse["pos"]["z"]), self.map_info)
         else:
             self.cur_warehouse_dist = None
             warehouse_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
 
         # 找到最近的目标驿站
         if len(target_stations) > 0:
-            self.cur_target_dist = min(
-                np.sqrt((s["pos"]["x"] - self.cur_pos[0]) ** 2 + (s["pos"]["z"] - self.cur_pos[1]) ** 2)
-                for s in target_stations
-            )
+            #找到最近的目标驿站
+            self.cur_target_dist = min_distance_with_fov(self.cur_pos, (target_stations[0]["pos"]["x"], target_stations[0]["pos"]["z"]), self.map_info)
         else:
             self.cur_target_dist = None
 
@@ -262,10 +254,7 @@ class Preprocessor:
                 self.cur_pos,
                 (nearest_npc["pos"]["x"], nearest_npc["pos"]["z"]),
             )
-            self.cur_npc_dist = min(
-                np.sqrt((n["pos"]["x"] - self.cur_pos[0]) ** 2 + (n["pos"]["z"] - self.cur_pos[1]) ** 2)
-                for n in self.npcs
-            )
+            self.cur_npc_dist = min_distance_with_fov(self.cur_pos, (nearest_npc["pos"]["x"], nearest_npc["pos"]["z"]), self.map_info)
         else:
             self.cur_npc_dist = None
             npc_station = get_pos_feat_2(False, self.cur_pos, self.cur_pos)
