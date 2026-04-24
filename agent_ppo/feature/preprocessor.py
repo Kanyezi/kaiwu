@@ -409,7 +409,7 @@ class Preprocessor:
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
-            num = 5 * newly_delivered
+            num = 3 * newly_delivered
             reward += num
             self.reward_log("Delivery",num)
 
@@ -476,7 +476,7 @@ class Preprocessor:
         pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
         if self.prev_prev_pos is not None and self.prev_pos is not None:
             if pos_key == self.prev_prev_pos:
-                num = -0.3
+                num = -0.035
                 reward += num
                 self.reward_log("RoundTrip", num)
                 chu("重复惩罚",num)
