@@ -468,22 +468,22 @@ class Preprocessor:
 
         # 8. 重复惩罚
         pos_key = (int(self.cur_pos[0]), int(self.cur_pos[1]))
-        if self.prev_prev_pos is not None and self.prev_pos is not None:
-            if pos_key == self.prev_prev_pos:
-                num = -0.035
-                reward += num
-                self.reward_log("RoundTrip", num)
-                chu("重复惩罚",num)
-        chu("重复_cur",pos_key)
-        chu("重复_prev",self.prev_pos)
-        chu("重复_prev_prev",self.prev_prev_pos)
+        # if self.prev_prev_pos is not None and self.prev_pos is not None:
+        #     if pos_key == self.prev_prev_pos:
+        #         num = -0.035
+        #         reward += num
+        #         self.reward_log("RoundTrip", num)
+        #         chu("重复惩罚",num)
+        # chu("重复_cur",pos_key)
+        # chu("重复_prev",self.prev_pos)
+        # chu("重复_prev_prev",self.prev_prev_pos)
 
         #转向惩罚
 
 
         # 8.1首次访问奖励，随探索进度衰减
         if pos_key not in self.visited_positions:
-            explore_bonus = 0.008 * (0.995 ** len(self.visited_positions))
+            explore_bonus = 0.008 * (0.992 ** len(self.visited_positions))
             reward += explore_bonus
             self.reward_log("FirstVisit", explore_bonus)
             self.visited_positions.add(pos_key)
