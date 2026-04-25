@@ -124,10 +124,13 @@ class Preprocessor:
         self.step_no = 0
         self.cur_target_dist = None
         self.prev_target_dist = None
+        self.min_target_dist = None
         self.cur_charger_dist = None
         self.prev_charger_dist = None
+        self.min_charger_dist = None
         self.cur_warehouse_dist = None
         self.prev_warehouse_dist = None
+        self.min_warehouse_dist = None
         self.map_info = None
         self.last_reward_log_step = -1
         self.cur_npc_dist = None
@@ -406,12 +409,33 @@ class Preprocessor:
         """
         reward = 0.0
 
+        def reward_on_new_min(cur_dist, min_attr, scale):
+            """Only reward when current distance is a new historical minimum."""
+            if cur_dist is None:
+                setattr(self, min_attr, None)
+                return 0.0
+
+            min_dist = getattr(self, min_attr)
+            if min_dist is None:
+                setattr(self, min_attr, cur_dist)
+                return 0.0
+
+            if cur_dist < min_dist:
+                improve = min_dist - cur_dist
+                setattr(self, min_attr, cur_dist)
+                return scale * improve
+            else:
+                return -0.0008
+            return 0.0
+
         # 1. Delivery reward / 投递奖励
         newly_delivered = max(0, self.delivered - self.last_delivered)
         if newly_delivered > 0:
             num = 3 * newly_delivered
             reward += num
             self.reward_log("Delivery",num)
+            # 到达驿站完成投递后，重置目标历史最小距离
+            self.min_target_dist = None
 
         # 2. Step penalty / 步数惩罚
         reward -= 0.001
@@ -421,9 +445,8 @@ class Preprocessor:
 
 
         # 3. 目标距离塑形奖励
-        if not self.battery_low and self.cur_target_dist is not None and self.prev_target_dist is not None and len(self.packages):
-            progress = self.prev_target_dist - self.cur_target_dist
-            num = 0.03 * progress
+        if not self.battery_low and self.cur_target_dist is not None and len(self.packages):
+            num = reward_on_new_min(self.cur_target_dist, "min_target_dist", 0.08)
             reward += num
             self.reward_log("Distance",num)
             chu("目标奖励",num)
@@ -433,28 +456,28 @@ class Preprocessor:
 
 
         # 4. 充电桩到达奖励（低电量时到达充电桩给予奖励）
-        if self.cur_charger_dist is not None:
-            arrived = self.cur_charger_dist < 3.0 and (self.prev_charger_dist is None or self.prev_charger_dist >= 3.0)
-            if arrived:
-                # 电量缺口比例（低于30%的部分）
-                deficit = max(0, 0.3 - self.battery / self.battery_max)
-                reward += 1.5 * deficit   # 最高 0.45
-                self.reward_log("ChargerArrival", 1.5 * deficit)
+        # if self.cur_charger_dist is not None:
+        #     arrived = self.cur_charger_dist < 3.0 and (self.prev_charger_dist is None or self.prev_charger_dist >= 3.0)
+        #     if arrived:
+        #         # 电量缺口比例（低于30%的部分）
+        #         deficit = max(0, 0.3 - self.battery / self.battery_max)
+        #         reward += 1.5 * deficit   # 最高 0.45
+        #         self.reward_log("ChargerArrival", 1.5 * deficit)
+        #         # 到达充电桩后重置，下一次必须刷新更近距离才有塑形奖励
+        #         self.min_charger_dist = None
 
         # 10. 低电量惩罚
         if self.battery_low:  # 电量低于30%
-            #远离充电桩惩罚，靠近不奖励
-            if self.packages and self.cur_charger_dist is not None and self.prev_charger_dist is not None:
-                progress = self.prev_charger_dist - self.cur_charger_dist
-                reward += 0.03 * progress
-                self.reward_log("ChargerDeparture", 0.03 * progress)
+            if self.packages and self.cur_charger_dist is not None:
+                num = reward_on_new_min(self.cur_charger_dist, "min_charger_dist", 0.08)
+                reward += num
+                self.reward_log("ChargerDeparture", num)
             reward -= 0.05
             self.reward_log("LowBatteryPenalty", -0.1)
 
         # 5. 补货前往仓库奖励
-        if not len(self.packages) and self.cur_warehouse_dist is not None and self.prev_warehouse_dist is not None:
-            progress = self.prev_warehouse_dist - self.cur_warehouse_dist
-            num = 0.03*progress
+        if not len(self.packages) and self.cur_warehouse_dist is not None:
+            num = reward_on_new_min(self.cur_warehouse_dist, "min_warehouse_dist", 0.08)
             reward += num
             self.reward_log("WarehouseArrival", num)
             chu("补货奖励",num)
@@ -469,6 +492,8 @@ class Preprocessor:
             reward += num
             self.reward_log("WarehouseReward", num)
             chu("补货奖励",num)
+            # 到达仓库并完成补货后，重置仓库历史最小距离
+            self.min_warehouse_dist = None
         chu("补货_cur",len(self.packages))
         chu("补货_prev",self.prev_package)
 
@@ -488,12 +513,12 @@ class Preprocessor:
 
 
         # 8.1首次访问奖励，随探索进度衰减
-        if pos_key not in self.visited_positions:
-            explore_bonus = 0.008 * (0.995 ** len(self.visited_positions))
-            reward += explore_bonus
-            self.reward_log("FirstVisit", explore_bonus)
-            self.visited_positions.add(pos_key)
-            chu("首次访问奖励", explore_bonus)
+        # if pos_key not in self.visited_positions:
+        #     explore_bonus = 0.008 * (0.995 ** len(self.visited_positions))
+        #     reward += explore_bonus
+        #     self.reward_log("FirstVisit", explore_bonus)
+        #     self.visited_positions.add(pos_key)
+        #     chu("首次访问奖励", explore_bonus)
 
         # 9.靠近官方机器人扣分
         if self.cur_npc_dist is not None and self.cur_npc_dist <= 3.0:
